@@ -17,15 +17,16 @@
 
 package org.apache.spark.sql.execution.datasources.jdbc
 
-import scala.collection.mutable.ArrayBuffer
-
-import org.apache.spark.internal.Logging
 import org.apache.spark.Partition
+import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.{DataFrame, Row, SaveMode, SparkSession, SQLContext}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression}
 import org.apache.spark.sql.jdbc.JdbcDialects
 import org.apache.spark.sql.sources._
 import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql._
+
+import scala.collection.mutable.ArrayBuffer
 
 /**
  * Instructions on how to partition the table among workers.
@@ -141,5 +142,82 @@ private[sql] case class JDBCRelation(
     val partitioningInfo = if (parts.nonEmpty) s" [numPartitions=${parts.length}]" else ""
     // credentials should not be included in the plan output, table information is sufficient.
     s"JDBCRelation(${jdbcOptions.table})" + partitioningInfo
+  }
+}
+
+private[sql] case class JoinableJDBCRelation(
+      parts: Array[Partition],
+      jdbcOptions: Seq[JDBCOptions],
+      isJoined: Boolean = false)(@transient val sparkSession: SparkSession)
+    extends BaseRelation
+        with JoinedScan {
+
+  override def sqlContext: SQLContext = sparkSession.sqlContext
+
+  override val needConversion: Boolean = false
+
+  override val schema: StructType = StructType(
+    jdbcOptions
+      .flatMap(opt => JDBCRDD.resolveTable(opt).fields)
+  )
+
+  // Check if JDBCRDD.compileFilter can accept input filters
+  override def unhandledFilters(filters: Array[Filter]): Array[Filter] = {
+    filters.filter(JDBCRDD.compileFilter(_, JdbcDialects.get(jdbcOptions.head.url)).isEmpty)
+  }
+
+  override def canJoinScan(relation: BaseRelation): Boolean = {
+    relation match {
+      case other: JoinableJDBCRelation if !other.isJoined || !this.isJoined =>
+        jdbcOptions.forall(_.url.equalsIgnoreCase(other.jdbcOptions.head.url))
+      case _ => false
+    } // TODO
+  }
+
+  // TODO: test it's working properly
+  override def createJoinedRelation(relation: JoinedScan): BaseRelation = {
+    assert(this.canJoinScan(relation.asInstanceOf[BaseRelation]))
+
+    val other = relation.asInstanceOf[JoinableJDBCRelation]
+
+    val rel = JoinableJDBCRelation(
+      JDBCRelation.columnPartition(null),
+      jdbcOptions ++ other.jdbcOptions,
+      isJoined = true
+    )(sparkSession)
+    rel
+  }
+
+  private def buildJdbcOptions(jdbcOptions: Seq[JDBCOptions]) = {
+    import scala.collection.JavaConverters._
+    val properties = jdbcOptions.head.asProperties
+    val params = properties.stringPropertyNames().asScala
+        .map(p => p -> properties.getProperty(p))
+        .toMap
+
+    val tables = jdbcOptions.map(_.table).mkString(", ")
+    val table_query = s"(select * from $tables) tmp"
+
+    new JDBCOptions(jdbcOptions.head.url, table_query, params)
+    // TODO build joined table query
+  }
+
+  override def buildScan(requiredColumns: Seq[Attribute], filters: Seq[Expression]): RDD[Row] = {
+    val projections = requiredColumns.map(_.sql).toArray
+    val expr = filters.toArray
+
+    JDBCRDD.scanTable(
+      sparkSession.sparkContext,
+      schema,
+      projections,
+      expr,
+      parts,
+      buildJdbcOptions(jdbcOptions)).asInstanceOf[RDD[Row]]
+  }
+
+  override def toString: String = {
+    val partitioningInfo = if (parts.nonEmpty) s" [numPartitions=${parts.length}]" else ""
+    // credentials should not be included in the plan output, table information is sufficient.
+    s"JoinableJDBCRelation(${jdbcOptions.map(_.table).mkString(" JOIN ")})" + partitioningInfo
   }
 }

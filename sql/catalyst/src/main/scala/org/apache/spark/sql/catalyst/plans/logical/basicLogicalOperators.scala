@@ -131,6 +131,19 @@ case class Filter(condition: Expression, child: LogicalPlan)
   }
 }
 
+case class FilterCollection(conditions: Seq[Expression], child: LogicalPlan)
+  extends UnaryNode with PredicateHelper {
+  override def output: Seq[Attribute] = child.output
+
+  override def maxRows: Option[Long] = child.maxRows
+
+  override protected def validConstraints: Set[Expression] = {
+    val predicates = conditions.flatMap(condition => splitConjunctivePredicates(condition))
+        .filterNot(SubqueryExpression.hasCorrelatedSubquery)
+    child.constraints.union(predicates.toSet)
+  }
+}
+
 abstract class SetOperation(left: LogicalPlan, right: LogicalPlan) extends BinaryNode {
 
   def duplicateResolved: Boolean = left.outputSet.intersect(right.outputSet).isEmpty

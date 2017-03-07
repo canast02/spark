@@ -65,6 +65,12 @@ object PhysicalOperation extends PredicateHelper {
         val substitutedCondition = substitute(aliases)(condition)
         (fields, filters ++ splitConjunctivePredicates(substitutedCondition), other, aliases)
 
+      case FilterCollection(conditions, child) if conditions.forall(_.deterministic) =>
+        val (fields, filters, other, aliases) = collectProjectsAndFilters(child)
+        val substitutedConditions = conditions.map(condition => substitute(aliases)(condition))
+        val conjPredicates = substitutedConditions.flatMap(splitConjunctivePredicates)
+        (fields, filters ++ conjPredicates, other, aliases)
+
       case BroadcastHint(child) =>
         collectProjectsAndFilters(child)
 

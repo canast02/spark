@@ -17,7 +17,7 @@
 
 package org.apache.spark.sql.execution.datasources.jdbc
 
-import org.apache.spark.sql.{AnalysisException, DataFrame, SaveMode, SQLContext}
+import org.apache.spark.sql.{AnalysisException, DataFrame, SQLContext, SaveMode}
 import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils._
 import org.apache.spark.sql.sources.{BaseRelation, CreatableRelationProvider, DataSourceRegister, RelationProvider}
 
@@ -44,7 +44,12 @@ class JdbcRelationProvider extends CreatableRelationProvider
         partitionColumn.get, lowerBound.get, upperBound.get, numPartitions.get)
     }
     val parts = JDBCRelation.columnPartition(partitionInfo)
-    JDBCRelation(parts, jdbcOptions)(sqlContext.sparkSession)
+
+    if ( parameters.getOrElse("joinable", "false").equals("true") ) {
+      JoinableJDBCRelation(parts, jdbcOptions :: Nil)(sqlContext.sparkSession)
+    } else {
+      JDBCRelation(parts, jdbcOptions)(sqlContext.sparkSession)
+    }
   }
 
   override def createRelation(

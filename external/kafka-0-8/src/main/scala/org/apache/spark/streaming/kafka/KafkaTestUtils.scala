@@ -20,13 +20,12 @@ package org.apache.spark.streaming.kafka
 import java.io.{File, IOException}
 import java.lang.{Integer => JInt}
 import java.net.InetSocketAddress
-import java.util.{Map => JMap, Properties}
+import java.util.{Properties, Map => JMap}
 import java.util.concurrent.TimeoutException
 
 import scala.annotation.tailrec
 import scala.collection.JavaConverters._
 import scala.util.control.NonFatal
-
 import kafka.admin.AdminUtils
 import kafka.api.Request
 import kafka.producer.{KeyedMessage, Producer, ProducerConfig}
@@ -36,7 +35,6 @@ import kafka.utils.{ZKStringSerializer, ZkUtils}
 import org.I0Itec.zkclient.ZkClient
 import org.apache.commons.lang3.RandomUtils
 import org.apache.zookeeper.server.{NIOServerCnxnFactory, ZooKeeperServer}
-
 import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
 import org.apache.spark.streaming.Time

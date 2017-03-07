@@ -20,13 +20,12 @@ package org.apache.spark.sql.execution.datasources.jdbc
 import java.sql.{Connection, Date, PreparedStatement, ResultSet, SQLException, Timestamp}
 
 import scala.util.control.NonFatal
-
 import org.apache.commons.lang3.StringUtils
-
 import org.apache.spark.{InterruptibleIterator, Partition, SparkContext, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.jdbc.{JdbcDialect, JdbcDialects}
 import org.apache.spark.sql.sources._
 import org.apache.spark.sql.types._
@@ -176,6 +175,29 @@ object JDBCRDD extends Logging {
       pruneSchema(schema, requiredColumns),
       quotedColumns,
       filters,
+      Array(),
+      parts,
+      url,
+      options)
+  }
+
+  def scanTable(
+     sc: SparkContext,
+     schema: StructType,
+     requiredColumns: Array[String],
+     expressions: Array[Expression],
+     parts: Array[Partition],
+     options: JDBCOptions): RDD[InternalRow] = {
+    val url = options.url
+    val dialect = JdbcDialects.get(url)
+    val quotedColumns = requiredColumns.map(colName => dialect.quoteIdentifier(colName))
+    new JDBCRDD(
+      sc,
+      JdbcUtils.createConnectionFactory(options),
+      pruneSchema(schema, requiredColumns),
+      quotedColumns,
+      Array(),
+      expressions,
       parts,
       url,
       options)
@@ -193,6 +215,7 @@ private[jdbc] class JDBCRDD(
     schema: StructType,
     columns: Array[String],
     filters: Array[Filter],
+    expressions: Array[Expression],
     partitions: Array[Partition],
     url: String,
     options: JDBCOptions)
@@ -215,10 +238,16 @@ private[jdbc] class JDBCRDD(
   /**
    * `filters`, but as a WHERE clause suitable for injection into a SQL query.
    */
-  private val filterWhereClause: String =
-    filters
-      .flatMap(JDBCRDD.compileFilter(_, JdbcDialects.get(url)))
-      .map(p => s"($p)").mkString(" AND ")
+  private val filterWhereClause: String = {
+    val f_where = filters
+        .flatMap(JDBCRDD.compileFilter(_, JdbcDialects.get(url)))
+
+    val e_where = expressions
+        .flatMap(_.sql)
+
+    (e_where ++ f_where)
+        .map(p => s"($p)").mkString(" AND ")
+  }
 
   /**
    * A WHERE clause representing both `filters`, if any, and the current partition.

@@ -316,3 +316,14 @@ trait InsertableRelation {
 trait CatalystScan {
   def buildScan(requiredColumns: Seq[Attribute], filters: Seq[Expression]): RDD[Row]
 }
+
+/**
+ * ::Experimental::
+ * An interface for experimenting with pushing joins down to data sources if possible.
+ *
+ * @since 2.11.0
+ */
+trait JoinedScan extends CatalystScan {
+  def canJoinScan(relation: BaseRelation): Boolean
+  def createJoinedRelation(other: JoinedScan): BaseRelation
+}
