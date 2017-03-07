@@ -25,7 +25,7 @@ import org.apache.spark.{InterruptibleIterator, Partition, SparkContext, TaskCon
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.expressions.{Attribute, BinaryOperator, Expression}
 import org.apache.spark.sql.jdbc.{JdbcDialect, JdbcDialects}
 import org.apache.spark.sql.sources._
 import org.apache.spark.sql.types._
@@ -182,19 +182,33 @@ object JDBCRDD extends Logging {
   }
 
   def scanTable(
-     sc: SparkContext,
-     schema: StructType,
-     requiredColumns: Array[String],
-     expressions: Array[Expression],
-     parts: Array[Partition],
-     options: JDBCOptions): RDD[InternalRow] = {
+      sc: SparkContext,
+      schema: StructType,
+      requiredColumns: Array[Attribute],
+      expressions: Array[Expression],
+      parts: Array[Partition],
+      options: JDBCOptions): RDD[InternalRow] = {
     val url = options.url
     val dialect = JdbcDialects.get(url)
-    val quotedColumns = requiredColumns.map(colName => dialect.quoteIdentifier(colName))
+    val quotedColumns = requiredColumns
+        .map { col =>
+          val m = col.metadata
+          val f = schema.filter(_.metadata.equals(m)).head
+          try {
+            (f.metadata.getString("table"), col.name)
+          } catch {
+            case _: Throwable => ("", col.name)
+          }
+        }
+        .map {
+          case ("", colName) => dialect.quoteIdentifier(colName)
+          case (tableName, colName) =>
+            s"${dialect.quoteIdentifier(tableName)}.${dialect.quoteIdentifier(colName)}"
+        }
     new JDBCRDD(
       sc,
       JdbcUtils.createConnectionFactory(options),
-      pruneSchema(schema, requiredColumns),
+      pruneSchema(schema, requiredColumns.map(_.name)),
       quotedColumns,
       Array(),
       expressions,
@@ -242,8 +256,21 @@ private[jdbc] class JDBCRDD(
     val f_where = filters
         .flatMap(JDBCRDD.compileFilter(_, JdbcDialects.get(url)))
 
-    val e_where = expressions
-        .flatMap(_.sql)
+    def expression_sql(e: Expression): String = {
+      e match {
+        case bo: BinaryOperator =>
+          s"${expression_sql(bo.left)} ${bo.sqlOperator} ${expression_sql(bo.right)}"
+        case a: Attribute =>
+          try {
+            s"`${a.metadata.getString("table")}`.`${a.name}`"
+          } catch {
+            case _: Throwable => a.sql
+          }
+        case _ => e.sql
+      }
+    }
+
+    val e_where = expressions.map(expression_sql)
 
     (e_where ++ f_where)
         .map(p => s"($p)").mkString(" AND ")

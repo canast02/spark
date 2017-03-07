@@ -287,32 +287,48 @@ class JoinPushSuite extends QueryTest with SharedSQLContext {
 //  }
 
   test("Without Pushing Joins to JDBC source") {
-    val qExec = sql(query1).queryExecution
+    val df = sql(query1)
+    val qExec = df.queryExecution
     val logicalPlan = qExec.optimizedPlan
     println(logicalPlan)
     assert(logicalPlan != null)
     val physicalPlan = qExec.executedPlan
     println(physicalPlan)
     assert(physicalPlan != null)
+    df.sort("e.emp_no").show()
+    timeit({
+      df.count()
+    })
   }
 
   test("With Pushing Joins to JDBC source") {
     withOptimization(PushDownJoin) {
-      val qExec = sql(query1).queryExecution
+      val df = sql(query1)
+      val qExec = df.queryExecution
       val logicalPlan = qExec.optimizedPlan
       println(logicalPlan)
       assert(logicalPlan != null)
       val physicalPlan = qExec.executedPlan
       println(physicalPlan)
       assert(physicalPlan != null)
+      df.sort("e.emp_no").show()
+      timeit({
+        df.count()
+      })
     }
   }
 
   test("With Selection and Pushing Joins to JDBC source") {
     withOptimization(PushDownJoin) {
-      val logicalPlan = sql(query2).queryExecution.optimizedPlan
+      val df = sql(query2)
+      val qExec = df.queryExecution
+      val logicalPlan = qExec.optimizedPlan
       println(logicalPlan)
       assert(logicalPlan != null)
+      val physicalPlan = qExec.executedPlan
+      println(physicalPlan)
+      assert(physicalPlan != null)
+      df.show()
     }
   }
 

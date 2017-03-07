@@ -23,7 +23,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression}
 import org.apache.spark.sql.jdbc.JdbcDialects
 import org.apache.spark.sql.sources._
-import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.types.{MetadataBuilder, StructField, StructType}
 import org.apache.spark.sql._
 
 import scala.collection.mutable.ArrayBuffer
@@ -158,7 +158,13 @@ private[sql] case class JoinableJDBCRelation(
 
   override val schema: StructType = StructType(
     jdbcOptions
-      .flatMap(opt => JDBCRDD.resolveTable(opt).fields)
+      .flatMap(opt => {
+        JDBCRDD.resolveTable(opt).fields.map { f =>
+          val builder = new MetadataBuilder().withMetadata(f.metadata)
+          builder.putString("table", opt.table)
+          StructField(f.name, f.dataType, f.nullable, builder.build())
+        }
+      })
   )
 
   // Check if JDBCRDD.compileFilter can accept input filters
@@ -188,7 +194,11 @@ private[sql] case class JoinableJDBCRelation(
     rel
   }
 
-  private def buildJdbcOptions(jdbcOptions: Seq[JDBCOptions]) = {
+  private def buildJdbcOptions(jdbcOptions: Seq[JDBCOptions]): JDBCOptions = {
+    if ( jdbcOptions.length == 1 ) {
+      return jdbcOptions.head
+    }
+
     import scala.collection.JavaConverters._
     val properties = jdbcOptions.head.asProperties
     val params = properties.stringPropertyNames().asScala
@@ -196,21 +206,18 @@ private[sql] case class JoinableJDBCRelation(
         .toMap
 
     val tables = jdbcOptions.map(_.table).mkString(", ")
-    val table_query = s"(select * from $tables) tmp"
+    val table_query = tables
 
     new JDBCOptions(jdbcOptions.head.url, table_query, params)
     // TODO build joined table query
   }
 
   override def buildScan(requiredColumns: Seq[Attribute], filters: Seq[Expression]): RDD[Row] = {
-    val projections = requiredColumns.map(_.sql).toArray
-    val expr = filters.toArray
-
     JDBCRDD.scanTable(
       sparkSession.sparkContext,
       schema,
-      projections,
-      expr,
+      requiredColumns.toArray,
+      filters.toArray,
       parts,
       buildJdbcOptions(jdbcOptions)).asInstanceOf[RDD[Row]]
   }
